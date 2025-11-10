@@ -88,40 +88,64 @@ st.markdown(
     ルール:
     - 最後の括弧の中の数字を優先して使います: `name (8).pdf` → 8
     - それが無ければ拡張子直前の数字を使います: `name 8.pdf` → 8
-    - 数字が見つからないファイルは末尾に回されます（アップロード順を維持）
+    - 数字が見つからないファイルは先頭に置かれます（アップロード順を維持）
     """
 )
 
 uploaded = st.file_uploader("PDFファイルをまとめてアップロードしてください", accept_multiple_files=True, type=["pdf"])
 
 if uploaded:
-    st.subheader("アップロードされたファイルと抽出した順序")
-    # Build a table-like display
-    display_rows = []
-    for idx, f in enumerate(uploaded):
-        num = extract_trailing_number(f.name)
-        display_rows.append((idx + 1, f.name, num if num is not None else "(なし)"))
+    st.subheader("アップロード")
+    st.write(f"{len(uploaded)} 個のファイルがアップロードされました。")
 
-    for row in display_rows:
-        st.write(f"{row[0]}. `{row[1]}` → {row[2]}")
+    # Prepare a stable key for uploaded set to avoid re-merging unnecessarily
+    try:
+        upload_key = tuple((f.name, f.size) for f in uploaded)
+    except Exception:
+        # Fallback if attribute missing
+        upload_key = tuple((f.name, getattr(f, "size", None)) for f in uploaded)
 
-    if st.button("結合してダウンロード" ):
+    # Initialize session state entries
+    if "merged_key" not in st.session_state:
+        st.session_state["merged_key"] = None
+    if "merged_bytes" not in st.session_state:
+        st.session_state["merged_bytes"] = None
+    if "prepared" not in st.session_state:
+        st.session_state["prepared"] = None
+    if "output_basename" not in st.session_state:
+        st.session_state["output_basename"] = "sample"
+
+    # If uploaded files changed, run merge and cache result
+    if st.session_state.get("merged_key") != upload_key:
         result = merge_pdfs_in_order(uploaded)
         if result is None:
             st.error("PDFの読み込みに失敗しました。ファイルが壊れていないか確認してください。")
+            st.session_state["merged_bytes"] = None
+            st.session_state["prepared"] = None
+            st.session_state["merged_key"] = None
         else:
             merged_bytes, prepared = result
+            st.session_state["merged_bytes"] = merged_bytes
+            st.session_state["prepared"] = prepared
+            st.session_state["merged_key"] = upload_key
 
-            # Show final merge order
-            st.subheader("結合順（先頭が最初のページになります）")
-            for i, (f, num, idx) in enumerate(prepared, start=1):
-                st.write(f"{i}. `{f.name}` — {num if num is not None else '(なし)'}")
+    # If merge succeeded, show order and download UI (auto-merged)
+    if st.session_state.get("merged_bytes"):
+        st.success("ダウンロードの準備ができました。")
+        col1, col2 = st.columns([3, 1])
 
-            st.success("結合が完了しました。下のボタンからダウンロードしてください。")
+        # Use Streamlit widget key so the user's input is stored reliably
+        with col1:
+            st.text_input("出力ファイル名", value=st.session_state.get("output_basename", "sample"), key="output_basename")
+
+        safe_name = (st.session_state.get("output_basename") or "sample").strip() or "sample"
+        out_filename = f"{safe_name}.pdf"
+
+        with col2:
             st.download_button(
-                label="マージ済みPDFをダウンロード",
-                data=merged_bytes,
-                file_name="merged.pdf",
+                label="ダウンロード",
+                data=st.session_state["merged_bytes"],
+                file_name=out_filename,
                 mime="application/pdf",
             )
 
